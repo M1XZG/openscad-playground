@@ -5,6 +5,8 @@ import Editor, { loader, Monaco } from '@monaco-editor/react';
 import openscadEditorOptions from '../language/openscad-editor-options.ts';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
 import { InputTextarea } from 'primereact/inputtextarea';
+import { InputText } from 'primereact/inputtext';
+import { Dialog } from 'primereact/dialog';
 import { Button } from 'primereact/button';
 import { MenuItem } from 'primereact/menuitem';
 import { Menu } from 'primereact/menu';
@@ -32,10 +34,47 @@ export default function EditorPanel({className, style}: {className?: string, sty
   if (!model) throw new Error('No model');
 
   const menu = useRef<Menu>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const state = model.state;
 
   const [editor, setEditor] = useState(null as monaco.editor.IStandaloneCodeEditor | null)
+
+  // Name-entry dialog used by "New file" and "Copy to new file".
+  const [nameDialog, setNameDialog] = useState<null | {mode: 'new' | 'copy', title: string}>(null);
+  const [pendingName, setPendingName] = useState('');
+
+  const suggestCopyName = () => {
+    const p = state.params.activePath;
+    const slash = p.lastIndexOf('/');
+    const dir = p.substring(0, slash + 1);
+    const base = p.substring(slash + 1);
+    const dot = base.lastIndexOf('.');
+    const stem = dot > 0 ? base.substring(0, dot) : base;
+    const ext = dot > 0 ? base.substring(dot) : '.scad';
+    return `${dir}${stem}-copy${ext}`;
+  };
+
+  const confirmNameDialog = () => {
+    const name = pendingName.trim();
+    if (name === '' || !nameDialog) return;
+    if (nameDialog.mode === 'new') {
+      model.newFile(name);
+    } else {
+      model.copyToNewFile(name);
+    }
+    setNameDialog(null);
+    setPendingName('');
+  };
+
+  const onUploadInputChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (files && files.length > 0) {
+      await model.uploadFiles(files);
+    }
+    // Reset so selecting the same file again still fires onChange.
+    e.target.value = '';
+  };
 
   if (editor) {
     const checkerRun = state.lastCheckerRun;
@@ -107,22 +146,28 @@ export default function EditorPanel({className, style}: {className?: string, sty
             // TODO: popup to ask for file name
             label: "New file",
             icon: 'pi pi-plus',
-            disabled: true,
+            command: () => {
+              setPendingName('/untitled.scad');
+              setNameDialog({mode: 'new', title: 'New file'});
+            },
           },
           {
             label: "Copy to new file",
             icon: 'pi pi-clone',
-            disabled: true,
+            command: () => {
+              setPendingName(suggestCopyName());
+              setNameDialog({mode: 'copy', title: 'Copy to new file'});
+            },
           },
           {
             label: "Upload file(s)",
             icon: 'pi pi-upload',
-            disabled: true,
+            command: () => fileInputRef.current?.click(),
           },
           {
             label: 'Download sources',
             icon: 'pi pi-download',
-            disabled: true,
+            command: () => model.saveProject(),
           },
           {
             separator: true
@@ -197,7 +242,42 @@ export default function EditorPanel({className, style}: {className?: string, sty
           <pre key={i}>{text}</pre>
         ))}
       </div>
-    
+
+      <input
+        ref={fileInputRef}
+        type="file"
+        multiple
+        style={{display: 'none'}}
+        onChange={onUploadInputChange}
+      />
+
+      <Dialog
+        header={nameDialog?.title ?? 'New file'}
+        visible={!!nameDialog}
+        onHide={() => { setNameDialog(null); setPendingName(''); }}
+        footer={
+          <div>
+            <Button label="Cancel" icon="pi pi-times" className="p-button-text"
+              onClick={() => { setNameDialog(null); setPendingName(''); }} />
+            <Button label="Create" icon="pi pi-check" autoFocus
+              disabled={pendingName.trim() === ''}
+              onClick={confirmNameDialog} />
+          </div>
+        }
+      >
+        <div className="flex flex-column gap-2" style={{minWidth: '20rem'}}>
+          <label htmlFor="new-file-name">File name</label>
+          <InputText
+            id="new-file-name"
+            value={pendingName}
+            autoFocus
+            onChange={e => setPendingName(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') confirmNameDialog(); }}
+          />
+          <small>Paths are relative to the project root, e.g. <code>/parts/bracket.scad</code>.</small>
+        </div>
+      </Dialog>
+
     </div>
   )
 }

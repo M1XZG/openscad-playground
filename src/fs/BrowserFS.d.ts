@@ -7,6 +7,8 @@ declare interface FS {
   symlink(target: string, source: string): void;
   readFileSync(path: string): BufferSource;
   lstatSync(path: string): {isDirectory(): boolean};
+  mkdirSync(path: string): void;
+  existsSync(path: string): boolean;
 }
 
 declare interface EmscriptenFS extends FS {}

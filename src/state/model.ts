@@ -5,6 +5,7 @@ import { MultiLayoutComponentId, SingleLayoutComponentId, State, StatePersister 
 import { VALID_EXPORT_FORMATS_2D, VALID_EXPORT_FORMATS_3D } from './formats.ts';
 import { bubbleUpDeepMutations } from "./deep-mutate.ts";
 import { downloadUrl, fetchSource, formatBytes, formatMillis, readFileAsDataURL } from '../utils.ts'
+import { getParentDir } from '../fs/filesystem.ts';
 
 import JSZip from 'jszip';
 import { ProcessStreams } from "../runner/openscad-runner.ts";
@@ -160,6 +161,77 @@ export class Model {
     if (this.mutate(s => s.params.sources = s.params.sources.map(src => src.path === s.params.activePath ? {path: src.path, content: source} : src))) {
       this.processSource();
     }
+  }
+
+  private normalizePath(path: string): string {
+    path = (path ?? '').trim();
+    if (path === '') return '';
+    // Collapse any leading/duplicate slashes and force an absolute root path.
+    path = path.replace(/\/+/g, '/');
+    if (!path.startsWith('/')) path = '/' + path;
+    return path;
+  }
+
+  // Best-effort write of a source into the editor filesystem so it shows up in the
+  // file picker and can be reopened. Root-level files are already surfaced through
+  // state.params.sources (as the default file is), so only files in a subdirectory
+  // are written here; otherwise they'd be listed twice. Rendering works off
+  // state.params.sources regardless, so a failure here is not fatal.
+  private writeFileToFS(path: string, content: string) {
+    try {
+      const dir = getParentDir(path);
+      if (!dir || dir === '/' || dir === '.') return;
+      const parts = dir.split('/').filter(p => p !== '');
+      let cur = '';
+      for (const part of parts) {
+        cur += '/' + part;
+        try {
+          if (!this.fs.existsSync(cur)) this.fs.mkdirSync(cur);
+        } catch (e) {
+          // directory already exists or cannot be created; ignore
+        }
+      }
+      this.fs.writeFile(path, content);
+    } catch (e) {
+      console.error('Failed to write file to editor FS:', path, e);
+    }
+  }
+
+  private addOrReplaceSource(path: string, content: string) {
+    this.writeFileToFS(path, content);
+    this.mutate(s => {
+      if (s.params.sources.some(src => src.path === path)) {
+        s.params.sources = s.params.sources.map(src => src.path === path ? {path, content} : src);
+      } else {
+        s.params.sources = [...s.params.sources, {path, content}];
+      }
+    });
+  }
+
+  newFile(rawPath: string, content: string = '') {
+    const path = this.normalizePath(rawPath);
+    if (path === '' || path === '/') return;
+    if (!this.state.params.sources.some(src => src.path === path)) {
+      this.addOrReplaceSource(path, content);
+    }
+    this.openFile(path);
+  }
+
+  copyToNewFile(rawPath: string) {
+    this.newFile(rawPath, this.source);
+  }
+
+  async uploadFiles(files: FileList | File[]) {
+    const list = Array.from(files as ArrayLike<File>);
+    let lastPath: string | undefined;
+    for (const file of list) {
+      const content = await file.text();
+      const path = this.normalizePath(file.name);
+      if (path === '' || path === '/') continue;
+      this.addOrReplaceSource(path, content);
+      lastPath = path;
+    }
+    if (lastPath) this.openFile(lastPath);
   }
 
   private async processSource() {
